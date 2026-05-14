@@ -822,19 +822,25 @@ document.addEventListener('paste',function(e){
   const imgItems=items.filter(i=>i.type.startsWith('image/'));
   if(!imgItems.length) return;
 
-  // 날짜/시간 패널이 보이면 → 날짜/시간 캡처로 처리
-  const dtPanel=document.getElementById('psmode-panel-direct');
-  if(dtPanel&&dtPanel.style.display!=='none'&&document.getElementById('tab2').classList.contains('active')){
+  const isTab2=document.getElementById('tab2').classList.contains('active');
+
+  // 1순위: 학생 캡처 탭이 활성이면 → 학생 OCR
+  const stuCaptureTab=document.getElementById('student-tab-capture');
+  const isStuCapture=stuCaptureTab&&stuCaptureTab.classList.contains('active');
+  if(isTab2&&isStuCapture){
+    e.preventDefault();
+    imgItems.forEach(item=>addCaptureFile(item.getAsFile(),true));
+    return;
+  }
+
+  // 2순위: 특정 시간 중복 확인 탭 활성 + 학생 캡처 탭 비활성 → 날짜/시간 캡처
+  const psmodeDirectBtn=document.getElementById('psmode-tab-direct');
+  const isDtMode=psmodeDirectBtn&&psmodeDirectBtn.classList.contains('active');
+  if(isTab2&&isDtMode){
     e.preventDefault();
     loadDtCapture(imgItems[0].getAsFile());
     return;
   }
-
-  // 학생 캡처 패널이면 → 기존 OCR
-  const stuPanel=document.getElementById('student-panel-capture');
-  if(!stuPanel||stuPanel.style.display==='none')return;
-  e.preventDefault();
-  imgItems.forEach(item=>addCaptureFile(item.getAsFile(),true));
 });
 
 function addCaptureFile(file, autoExtract=false){
