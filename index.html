@@ -163,7 +163,7 @@
 <header class="app-header">
   <div class="header-inner">
     <div>
-      <div class="header-title">📋 비교과 프로그램 수업 중복 검사 시스템 <span style="font-size:13px;font-weight:400;opacity:0.7;margin-left:8px">v0.53</span></div>
+      <div class="header-title">📋 비교과 프로그램 수업 중복 검사 시스템 <span style="font-size:13px;font-weight:400;opacity:0.7;margin-left:8px">v0.54</span></div>
       <div class="header-sub">학생성공·상담센터 | 교수·학생의 수업시간 중복 여부를 빠르게 확인하세요</div>
     </div>
     <div class="header-badge">🎓 계명문화대학교</div>
@@ -1089,73 +1089,66 @@ async function splitImageColumns(dataUrl){
   });
 }
 
-// 이름·학번 텍스트를 줄 단위로 정밀 매핑
+// 이름·학번 텍스트를 줄 단위로 매핑 — 이름 우선 전략
 function mergeColumnOcr(nameText, idText){
   const pm=getPersonMap();
 
-  // 이름 추출 (한글 2~5자)
+  // ── 이름 추출 (한글 2~5자) ──
   const nameLines=nameText.split(/\n/)
     .map(l=>{ const m=l.match(/[가-힣]{2,5}/g); return m?m[0]:null; })
     .filter(Boolean);
 
-  // 학번 추출 — OCR 오인식 최대 교정
+  // ── 학번 추출 (OCR 교정 포함) ──
   const idLines=idText.split(/\n/).map(l=>{
-    // 숫자처럼 보이는 문자 교정 (더 넓은 범위)
-    let f=l
-      .replace(/[Oo]/g,'0').replace(/[lI|]/g,'1')
-      .replace(/[Ss]/g,'5').replace(/[Zz]/g,'2')
-      .replace(/[Gg]/g,'6').replace(/[Bb]/g,'8')
-      .replace(/[Tt]/g,'1').replace(/[Qq]/g,'0');
+    let f=l.replace(/[Oo]/g,'0').replace(/[lI|]/g,'1')
+           .replace(/[Ss]/g,'5').replace(/[Zz]/g,'2')
+           .replace(/[Gg]/g,'6').replace(/[Bb]/g,'8')
+           .replace(/[Tt]/g,'1').replace(/[Qq]/g,'0');
     const ap=f.match(/\d{2,3}[A-Z]\d{3,6}/gi);
     if(ap) return ap[0].toUpperCase();
     const dp=f.match(/\d{6,10}/g);
     return dp?dp[0]:null;
   }).filter(Boolean);
 
-  const results=[];
   const maxLen=Math.max(nameLines.length, idLines.length);
+  const raw=[];
   for(let i=0;i<maxLen;i++){
-    const name=nameLines[i]||'';
-    const id=idLines[i]||'';
-    if(!name&&!id) continue;
-    if(id&&results.find(r=>r.id===id)) continue;
-    const found=id?(pm[id]||pm[id.toUpperCase()]):null;
-    results.push({name:(found&&found.name)?found.name:name, id});
+    raw.push({ocrName:nameLines[i]||'', ocrId:idLines[i]||''});
   }
 
-  // 이름으로 학번 역탐색 (학번 누락된 행)
-  results.forEach(r=>{
-    if(r.name&&!r.id){
-      const f=Object.values(pm).find(p=>p.name===r.name&&p.category==='학생');
-      if(f){r.id=f.id;}
+  // ── 이름 우선 매칭 전략 ──
+  // 학번 OCR은 오류가 많으므로 이름으로 먼저 찾고, 학번은 보조로만 사용
+  const usedIds=new Set();
+  const results=raw.map(r=>{
+    const {ocrName,ocrId}=r;
+
+    // 1. 이름으로 시간표 탐색 (가장 신뢰도 높음)
+    if(ocrName){
+      // 완전 일치
+      const exact=Object.values(pm).find(p=>p.name===ocrName&&p.category==='학생'&&!usedIds.has(p.id));
+      if(exact){usedIds.add(exact.id);return {name:exact.name,id:exact.id,_byName:true};}
+
+      // 성씨 + 이름 부분일치 (2자 이름 등)
+      const partial=Object.values(pm).find(p=>
+        p.category==='학생'&&!usedIds.has(p.id)&&
+        (p.name.startsWith(ocrName)||ocrName.startsWith(p.name)||
+         (ocrName.length>=2&&p.name.includes(ocrName.slice(1))))
+      );
+      if(partial){usedIds.add(partial.id);return {name:partial.name,id:partial.id,_byName:true};}
     }
-    if(r.id&&!r.name){
-      const f=pm[r.id]||pm[r.id.toUpperCase()];
-      if(f)r.name=f.name;
+
+    // 2. 학번이 시간표에 정확히 있으면 사용
+    if(ocrId){
+      const exact=pm[ocrId]||pm[ocrId.toUpperCase()];
+      if(exact&&!usedIds.has(exact.id)){
+        usedIds.add(exact.id);
+        return {name:exact.name,id:exact.id};
+      }
     }
+
+    // 3. 둘 다 못 찾음 → OCR 원문 유지 (사용자가 수정)
+    return {name:ocrName,id:ocrId,_unmatched:true};
   });
-
-  // 이웃 학번 패턴으로 오인식 교정 (mergeColumnOcr 내부에서 즉시 적용)
-  const valid=results.filter(r=>r.id&&(pm[r.id]||pm[r.id.toUpperCase()]));
-  if(valid.length>=2){
-    const prefixCount={};
-    valid.forEach(r=>{
-      const p=r.id.match(/^(\d{2,3}[A-Z]|\d{4})/i);
-      if(p)prefixCount[p[0].toUpperCase()]=(prefixCount[p[0].toUpperCase()]||0)+1;
-    });
-    const commonPrefix=Object.entries(prefixCount).sort((a,b)=>b[1]-a[1])[0]?.[0];
-    if(commonPrefix){
-      results.forEach(r=>{
-        if(!r.id||pm[r.id]||pm[r.id.toUpperCase()]) return;
-        const cp=r.id.match(/^(\d{2,3}[A-Z]|\d{4})/i);
-        if(!cp||cp[0].toUpperCase()===commonPrefix) return;
-        const suffix=r.id.slice(cp[0].length);
-        const candidate=(commonPrefix+suffix).toUpperCase();
-        const found=pm[candidate]||pm[candidate.toUpperCase()];
-        if(found){r.id=candidate;r.name=found.name;r._corrected=true;}
-      });
-    }
-  }
 
   return results.filter(r=>r.id||r.name);
 }
@@ -1404,13 +1397,27 @@ function autoCorrectByNeighbors(students){
     }
   });
 
-  // 4단계: 전체가 틀렸을 때 (이웃 없음) → 전체 퍼지 매칭
+  // 4단계: 이름으로 학번 역탐색 (퍼지보다 안전)
+  students.forEach(s=>{
+    if(s.id&&(pm[s.id]||pm[(s.id||'').toUpperCase()])) return;
+    if(!s.name) return;
+    const byName=Object.values(pm).find(p=>
+      p.name===s.name&&p.category==='학생'&&
+      !students.find(x=>x!==s&&x.id===p.id)
+    );
+    if(byName){s.id=byName.id;s._corrected=true;}
+  });
+
+  // 5단계: 퍼지 매칭 (이름 검증 추가 — 이름이 맞을 때만 적용)
   const stillInvalid=students.filter(s=>s.id&&!(pm[s.id]||pm[(s.id||'').toUpperCase()]));
-  if(stillInvalid.length===students.length&&students.length>0){
-    students.forEach(s=>{
+  if(stillInvalid.length>0){
+    stillInvalid.forEach(s=>{
       if(!s.id) return;
-      const fuzzy=fuzzyFindId(s.id,pm,3);
-      if(fuzzy&&!students.find(x=>x!==s&&x.id===fuzzy.id)){
+      const fuzzy=fuzzyFindId(s.id,pm,2);
+      if(!fuzzy) return;
+      // 이름도 있으면 이름 일치할 때만 적용
+      if(s.name&&fuzzy.name&&s.name!==fuzzy.name) return;
+      if(!students.find(x=>x!==s&&x.id===fuzzy.id)){
         s.id=fuzzy.id;s.name=fuzzy.name;s._corrected=true;
       }
     });
