@@ -163,7 +163,7 @@
 <header class="app-header">
   <div class="header-inner">
     <div>
-      <div class="header-title">📋 비교과 프로그램 수업 중복 검사 시스템 <span style="font-size:13px;font-weight:400;opacity:0.7;margin-left:8px">v0.50</span></div>
+      <div class="header-title">📋 비교과 프로그램 수업 중복 검사 시스템 <span style="font-size:13px;font-weight:400;opacity:0.7;margin-left:8px">v0.51</span></div>
       <div class="header-sub">학생성공·상담센터 | 교수·학생의 수업시간 중복 여부를 빠르게 확인하세요</div>
     </div>
     <div class="header-badge">🎓 계명문화대학교</div>
@@ -1557,6 +1557,45 @@ function updateExtractedId(idx, val){
     }
   }
 }
+
+function onManualIdInput(val){
+  const id=(val||'').trim().toUpperCase();
+  const nameEl=document.getElementById('manualAddName');
+  const msgEl=document.getElementById('manualAddMsg');
+  if(!id){if(nameEl)nameEl.textContent='';if(msgEl)msgEl.textContent='';return;}
+  const pm=getPersonMap();
+  const found=pm[id]||pm[id.toLowerCase()];
+  if(nameEl){nameEl.textContent=found?(found.name||''):'';nameEl.style.color=found?'var(--success)':'';}
+  if(msgEl)msgEl.textContent='';
+}
+
+function manualAddStudent(){
+  const el=document.getElementById('manualAddId');
+  const msgEl=document.getElementById('manualAddMsg');
+  if(!el)return;
+  const raw=(el.value||'').trim();
+  if(!raw){if(msgEl)msgEl.innerHTML='<span style="color:var(--danger)">학번을 입력하세요</span>';return;}
+  const id=raw.toUpperCase();
+  const pm=getPersonMap();
+  const found=pm[id]||pm[raw];
+  if(extractedStudents.find(s=>s.id===id||s.id===raw)){
+    if(msgEl)msgEl.innerHTML='<span style="color:var(--warning)">⚠️ 이미 목록에 있습니다</span>';
+    return;
+  }
+  const student=found||{id,name:'',dept:'',category:'학생'};
+  extractedStudents.push({...student,id});
+  renderExtractedPreview();
+  if(!selectedStudents.find(s=>s.id===id)){
+    selectedStudents.push({...student,id});
+    renderStudents();
+  }
+  el.value='';
+  const nameEl=document.getElementById('manualAddName');
+  if(nameEl)nameEl.textContent='';
+  if(msgEl)msgEl.innerHTML=`<span style="color:var(--success)">✅ ${found?(found.name||id):id} 추가됨</span>`;
+  el.focus();
+}
+
 
 function addAllExtracted(){
   const pm=getPersonMap();
