@@ -163,7 +163,7 @@
 <header class="app-header">
   <div class="header-inner">
     <div>
-      <div class="header-title">📋 비교과 프로그램 수업 중복 검사 시스템 <span style="font-size:13px;font-weight:400;opacity:0.7;margin-left:8px">v0.51</span></div>
+      <div class="header-title">📋 비교과 프로그램 수업 중복 검사 시스템 <span style="font-size:13px;font-weight:400;opacity:0.7;margin-left:8px">v0.53</span></div>
       <div class="header-sub">학생성공·상담센터 | 교수·학생의 수업시간 중복 여부를 빠르게 확인하세요</div>
     </div>
     <div class="header-badge">🎓 계명문화대학교</div>
@@ -377,7 +377,7 @@
           <!-- 추출 결과 확인 -->
           <div id="extractedPreview" style="display:none;margin-top:14px">
             <div style="font-weight:600;font-size:13px;margin-bottom:8px;color:var(--ps)">🤖 AI가 인식한 학생 목록 — 확인 후 추가하세요</div>
-            <div id="extractedList" style="border:1px solid #ddd6fe;border-radius:8px;overflow:hidden;background:white;max-height:360px;overflow-y:auto"></div>
+            <div id="extractedList" style="border:1px solid #ddd6fe;border-radius:8px;overflow:hidden;background:white"  id="extractedListWrap"></div>
             <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
               <button class="btn btn-ps btn-sm" onclick="addAllExtracted()">✅ 전체 추가</button>
               <button class="btn btn-secondary btn-sm" onclick="addCheckedExtracted()">☑️ 선택 항목만 추가</button>
@@ -632,7 +632,13 @@ function resetAll(){
   switchSub('student','capture');
   switchSub('prof','search');
   switchTab(2);
-  setTimeout(()=>{const el=document.getElementById('profSearchInput');if(el){el.focus();el.select();}},150);
+  setTimeout(()=>{
+    const el=document.getElementById('profSearchInput');
+    if(el){el.focus();el.select();
+    // 브라우저 포커스 확보 재시도
+    setTimeout(()=>{el.focus();},100);
+    }
+  },300);
 }
 
 function selectMode(mode){/* 통합됨 - 항상 P&S 모드 */}
@@ -1325,52 +1331,90 @@ async function extractSingleImage(idx){
 
 // 주변 학번 패턴으로 미인식 학번 자동 교정
 // 규칙: 학번 3~4번째 자리(학과코드)가 같으면 같은 학과
+// 레벤슈타인 거리 계산 (문자열 유사도)
+function levenshtein(a,b){
+  const m=a.length,n=b.length;
+  const dp=Array.from({length:m+1},(_,i)=>Array.from({length:n+1},(_,j)=>i||j));
+  for(let i=1;i<=m;i++)for(let j=1;j<=n;j++)
+    dp[i][j]=a[i-1]===b[j-1]?dp[i-1][j-1]:1+Math.min(dp[i-1][j],dp[i][j-1],dp[i-1][j-1]);
+  return dp[m][n];
+}
+
+// 퍼지 매칭: 시간표에서 가장 비슷한 학번 찾기
+function fuzzyFindId(ocrId, pm, maxDist=2){
+  if(!ocrId||ocrId.length<5) return null;
+  let best=null, bestDist=maxDist+1;
+  // 같은 자릿수 또는 ±1 자릿수 학번만 비교 (속도 최적화)
+  const lenRange=[ocrId.length-1, ocrId.length, ocrId.length+1];
+  for(const [id,p] of Object.entries(pm)){
+    if(!lenRange.includes(id.length)) continue;
+    const dist=levenshtein(ocrId, id);
+    if(dist<bestDist){bestDist=dist;best=p;}
+  }
+  return best;
+}
+
 function autoCorrectByNeighbors(students){
   const pm=getPersonMap();
-  const WINDOW=3; // 위아래 3명씩 참조
+  const WINDOW=5;
 
-  students.forEach((s,i)=>{
-    // 이미 시간표에 있으면 스킵
-    if(s.id&&(pm[s.id]||pm[(s.id||'').toUpperCase()])) return;
-    if(!s.id) return;
-
-    // 주변 학생들의 학번 수집 (시간표에 있는 것만)
-    const neighbors=[];
-    for(let d=1;d<=WINDOW;d++){
-      if(i-d>=0&&students[i-d].id){const nb=students[i-d].id;if(pm[nb]||pm[nb.toUpperCase()])neighbors.push(nb);}
-      if(i+d<students.length&&students[i+d].id){const nb=students[i+d].id;if(pm[nb]||pm[nb.toUpperCase()])neighbors.push(nb);}
-    }
-    if(!neighbors.length) return;
-
-    // 주변 학번의 앞 4자리(연도+학과코드) 최빈값 추출
+  // 1단계: prefix 기반 교정 (기존 방식)
+  const validIds=students.filter(s=>s.id&&(pm[s.id]||pm[(s.id||'').toUpperCase()])).map(s=>s.id);
+  let commonPrefix=null;
+  if(validIds.length>=2){
     const prefixCount={};
-    neighbors.forEach(nb=>{
-      // 알파벳 포함 학번(26A9001) 처리
-      const p=nb.match(/^(\d{2,3}[A-Z]|\d{4})/i);
+    validIds.forEach(id=>{
+      const p=id.match(/^(\d{2,3}[A-Z]|\d{4})/i);
       if(p)prefixCount[p[0].toUpperCase()]=(prefixCount[p[0].toUpperCase()]||0)+1;
     });
-    const commonPrefix=Object.entries(prefixCount).sort((a,b)=>b[1]-a[1])[0]?.[0];
-    if(!commonPrefix) return;
+    const top=Object.entries(prefixCount).sort((a,b)=>b[1]-a[1])[0];
+    if(top&&top[1]>=1) commonPrefix=top[0];
+  }
 
-    // 현재 학번의 prefix 부분 추출 후 교체 시도
-    const curId=s.id;
-    const curPat=curId.match(/^(\d{2,3}[A-Z]|\d{4})/i);
-    if(!curPat) return;
-    const curPrefix=curPat[0].toUpperCase();
-    if(curPrefix===commonPrefix) return; // 이미 같은 prefix
+  students.forEach((s,i)=>{
+    if(!s.id) return;
+    if(pm[s.id]||pm[(s.id||'').toUpperCase()]) return; // 이미 맞음
 
-    const suffix=curId.slice(curPrefix.length);
-    const candidate=(commonPrefix+suffix).toUpperCase();
+    let fixed=false;
 
-    // 교정된 학번이 시간표에 있으면 적용
-    const found=pm[candidate]||pm[candidate.toUpperCase()];
-    if(found){
-      console.log(`학번 교정: ${curId} → ${candidate} (${found.name})`);
-      s.id=candidate;
-      s.name=found.name;
-      s._corrected=true; // 교정됨 표시
+    // prefix 교체 시도
+    if(commonPrefix){
+      const curPat=s.id.match(/^(\d{2,3}[A-Z]|\d{4})/i);
+      if(curPat){
+        const suffix=s.id.slice(curPat[0].length);
+        const candidate=(commonPrefix+suffix).toUpperCase();
+        const found=pm[candidate]||pm[candidate.toUpperCase()];
+        if(found){s.id=candidate;s.name=found.name;s._corrected=true;fixed=true;}
+      }
+    }
+
+    // 2단계: prefix 교체로 안 되면 퍼지 매칭
+    if(!fixed){
+      const fuzzy=fuzzyFindId(s.id, pm, 2);
+      if(fuzzy){
+        console.log(`퍼지교정: ${s.id} → ${fuzzy.id} (${fuzzy.name})`);
+        s.id=fuzzy.id;s.name=fuzzy.name;s._corrected=true;fixed=true;
+      }
+    }
+
+    // 3단계: 이름으로 학번 탐색
+    if(!fixed&&s.name){
+      const byName=Object.values(pm).find(p=>p.name===s.name&&p.category==='학생');
+      if(byName){s.id=byName.id;s._corrected=true;}
     }
   });
+
+  // 4단계: 전체가 틀렸을 때 (이웃 없음) → 전체 퍼지 매칭
+  const stillInvalid=students.filter(s=>s.id&&!(pm[s.id]||pm[(s.id||'').toUpperCase()]));
+  if(stillInvalid.length===students.length&&students.length>0){
+    students.forEach(s=>{
+      if(!s.id) return;
+      const fuzzy=fuzzyFindId(s.id,pm,3);
+      if(fuzzy&&!students.find(x=>x!==s&&x.id===fuzzy.id)){
+        s.id=fuzzy.id;s.name=fuzzy.name;s._corrected=true;
+      }
+    });
+  }
   return students;
 }
 
@@ -1527,6 +1571,14 @@ function renderExtractedPreview(){
       </div>`+rows
     :'<div style="padding:12px;color:var(--text-secondary)">인식된 학생이 없습니다</div>';
   document.getElementById('extractedPreview').style.display='block';
+  // 10명 초과 시에만 스크롤 활성화
+  const listEl=document.getElementById('extractedList');
+  if(listEl){
+    const rowH=42; // 행 평균 높이(px)
+    const n=extractedStudents.length;
+    if(n>10){listEl.style.maxHeight=(rowH*10+40)+'px';listEl.style.overflowY='auto';}
+    else{listEl.style.maxHeight='none';listEl.style.overflowY='visible';}
+  }
 }
 
 function updateExtractedId(idx, val){
