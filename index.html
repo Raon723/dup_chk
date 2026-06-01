@@ -163,7 +163,7 @@
 <header class="app-header">
   <div class="header-inner">
     <div>
-      <div class="header-title">📋 비교과 프로그램 수업 중복 검사 시스템 <span style="font-size:13px;font-weight:400;opacity:0.7;margin-left:8px">v0.54</span></div>
+      <div class="header-title">📋 비교과 프로그램 수업 중복 검사 시스템 <span style="font-size:13px;font-weight:400;opacity:0.7;margin-left:8px">v0.57</span></div>
       <div class="header-sub">학생성공·상담센터 | 교수·학생의 수업시간 중복 여부를 빠르게 확인하세요</div>
     </div>
     <div class="header-badge">🎓 계명문화대학교</div>
@@ -1089,6 +1089,70 @@ async function splitImageColumns(dataUrl){
   });
 }
 
+// 전체OCR + 칼럼분리OCR 두 결과를 시간표 기반으로 통합
+function smartMergeOcr(fullText, nameText, idText){
+  const pm=getPersonMap();
+  const allStudents=Object.values(pm).filter(p=>p.category==='학생');
+
+  // 결과1: 전체이미지 OCR → parseOcrText
+  const r1=parseOcrText(fullText);
+  // 결과2: 칼럼분리 OCR → mergeColumnOcr
+  const r2=mergeColumnOcr(nameText, idText);
+
+  // 시간표에서 이름으로 학생 찾기 (정확도 기준)
+  function findByName(name){
+    if(!name||name.length<2) return null;
+    // 완전 일치
+    const exact=allStudents.find(p=>p.name===name);
+    if(exact) return exact;
+    return null;
+  }
+
+  // 두 결과 합치기: 시간표에 있는 결과 우선
+  const merged=[];
+  const usedIds=new Set();
+
+  // 두 결과를 행 단위로 비교
+  const maxLen=Math.max(r1.length, r2.length);
+  for(let i=0;i<maxLen;i++){
+    const a=r1[i]||{name:'',id:''};
+    const b=r2[i]||{name:'',id:''};
+
+    // 시간표에서 이름으로 찾기 (r1, r2 순서로)
+    const foundByNameA=findByName(a.name);
+    const foundByNameB=findByName(b.name);
+
+    let chosen=null;
+
+    if(foundByNameA&&!usedIds.has(foundByNameA.id)){
+      chosen={name:foundByNameA.name,id:foundByNameA.id};
+    } else if(foundByNameB&&!usedIds.has(foundByNameB.id)){
+      chosen={name:foundByNameB.name,id:foundByNameB.id};
+    } else {
+      // 이름으로 못 찾으면 학번으로 시도
+      const idA=a.id||(a.id||'').toUpperCase();
+      const idB=b.id||(b.id||'').toUpperCase();
+      const foundById=pm[idA]||pm[idA.toUpperCase()]||pm[idB]||pm[idB.toUpperCase()];
+      if(foundById&&!usedIds.has(foundById.id)){
+        chosen={name:foundById.name,id:foundById.id};
+      } else if(a.name||a.id||b.name||b.id){
+        // 시간표에 없어도 OCR 결과 유지
+        chosen={name:a.name||b.name, id:a.id||b.id, _unmatched:true};
+      }
+    }
+
+    if(chosen){
+      if(chosen.id) usedIds.add(chosen.id);
+      if(!merged.find(m=>m.id&&m.id===chosen.id)){
+        merged.push(chosen);
+      }
+    }
+  }
+
+  return merged.filter(r=>r.id||r.name);
+}
+
+
 // 이름·학번 텍스트를 줄 단위로 매핑 — 이름 우선 전략
 function mergeColumnOcr(nameText, idText){
   const pm=getPersonMap();
@@ -1269,24 +1333,31 @@ async function extractSingleImage(idx){
 
   try{
     if(typeof Tesseract==='undefined') throw new Error('OCR 라이브러리 로드 실패');
-    showSt(`🖼️ [${idx+1}번 이미지] 칼럼 분리 중...`);
-    const [nameImg, idImg]=await splitImageColumns(captureImages[idx].dataUrl);
+    showSt(`🖼️ [${idx+1}번 이미지] 전처리 중...`);
+    const processedUrl=await preprocessImage(captureImages[idx].dataUrl);
 
-    showSt(`🔍 [${idx+1}번 이미지] 이름 칼럼 인식 중...`);
-    const r1=await Tesseract.recognize(nameImg,'kor',{tessedit_pageseg_mode:'6',logger:m=>{
-      if(m.status==='recognizing text') showSt(`🔍 [${idx+1}번] 이름 인식 ${Math.round((m.progress||0)*100)}%`);
-    }});
+    showSt(`🔍 [${idx+1}번 이미지] 전체 텍스트 인식 중...`);
+    const fullResult=await Tesseract.recognize(processedUrl,'kor+eng',{
+      tessedit_pageseg_mode:'6',
+      logger:m=>{
+        if(m.status==='recognizing text')
+          showSt(`🔍 [${idx+1}번] 인식 중 ${Math.round((m.progress||0)*100)}%`);
+      }
+    });
+    const fullText=(fullResult.data?fullResult.data.text:fullResult.text)||'';
+
+    // 칼럼 분리 OCR도 병렬로 실행해서 교차검증
+    const [nameImg,idImg]=await splitImageColumns(captureImages[idx].dataUrl);
+    const [r1,r2]=await Promise.all([
+      Tesseract.recognize(nameImg,'kor',{tessedit_pageseg_mode:'6'}),
+      Tesseract.recognize(idImg,'eng',{tessedit_pageseg_mode:'6',tessedit_char_whitelist:'0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'})
+    ]);
     const nameText=(r1.data?r1.data.text:r1.text)||'';
-
-    showSt(`🔍 [${idx+1}번 이미지] 학번 칼럼 인식 중...`);
-    const r2=await Tesseract.recognize(idImg,'eng',{logger:m=>{
-      if(m.status==='recognizing text') showSt(`🔍 [${idx+1}번] 학번 인식 ${Math.round((m.progress||0)*100)}%`);
-    }});
     const idText=(r2.data?r2.data.text:r2.text)||'';
 
-    const parsed=mergeColumnOcr(nameText, idText);
+    // 두 방법 결과를 시간표 기반으로 통합
+    const parsed=smartMergeOcr(fullText, nameText, idText);
 
-    // 기존 extractedStudents에 중복 없이 병합 + 시간표 이름 자동 보정
     const pm=getPersonMap();
     let added=0;
     parsed.forEach(s=>{
@@ -1294,8 +1365,8 @@ async function extractSingleImage(idx){
       if(s.id&&!extractedStudents.find(x=>x.id===s.id)){extractedStudents.push(s);added++;}
       else if(!s.id&&s.name&&!extractedStudents.find(x=>x.name===s.name)){extractedStudents.push(s);added++;}
     });
-    // 주변 학번 패턴으로 미인식 학번 자동 교정
     autoCorrectByNeighbors(extractedStudents);
+    fillSequentialGaps(extractedStudents);
 
     captureImages[idx].status= parsed.length?'done':'fail';
     captureImages[idx].count=parsed.length;
@@ -1349,79 +1420,197 @@ function fuzzyFindId(ocrId, pm, maxDist=2){
 
 function autoCorrectByNeighbors(students){
   const pm=getPersonMap();
-  const WINDOW=5;
 
-  // 1단계: prefix 기반 교정 (기존 방식)
-  const validIds=students.filter(s=>s.id&&(pm[s.id]||pm[(s.id||'').toUpperCase()])).map(s=>s.id);
-  let commonPrefix=null;
-  if(validIds.length>=2){
-    const prefixCount={};
-    validIds.forEach(id=>{
-      const p=id.match(/^(\d{2,3}[A-Z]|\d{4})/i);
-      if(p)prefixCount[p[0].toUpperCase()]=(prefixCount[p[0].toUpperCase()]||0)+1;
-    });
-    const top=Object.entries(prefixCount).sort((a,b)=>b[1]-a[1])[0];
-    if(top&&top[1]>=1) commonPrefix=top[0];
+  // ── P&S 패턴 분석 ──
+  // 동일 학과·학년 + 순번 학번 특성을 활용
+  // 1. 확정된(시간표 있는) 학번에서 공통 prefix와 번호 범위 파악
+  const confirmed=students.filter(s=>s.id&&(pm[s.id]||pm[(s.id||'').toUpperCase()]));
+  const confirmedIds=confirmed.map(s=>s.id);
+
+  // 공통 prefix 추출 (학과코드 포함, 더 긴 prefix 우선)
+  let commonPrefix=null, prefixLen=0;
+  if(confirmedIds.length>=2){
+    // 4자리, 5자리, 6자리 prefix 순서로 시도
+    for(const pLen of [6,5,4]){
+      const prefixCount={};
+      confirmedIds.forEach(id=>{
+        if(id.length>=pLen){
+          const p=id.substring(0,pLen);
+          prefixCount[p]=(prefixCount[p]||0)+1;
+        }
+      });
+      const top=Object.entries(prefixCount).sort((a,b)=>b[1]-a[1])[0];
+      // 절반 이상이 동일 prefix면 채택
+      if(top&&top[1]>=Math.max(1,Math.floor(confirmedIds.length*0.4))){
+        commonPrefix=top[0]; prefixLen=pLen; break;
+      }
+    }
   }
 
+  // 확정된 학번의 번호 범위 파악 (순번 유추용)
+  let knownNums=[];
+  if(commonPrefix){
+    knownNums=confirmedIds
+      .filter(id=>id.startsWith(commonPrefix))
+      .map(id=>parseInt(id.substring(prefixLen)))
+      .filter(n=>!isNaN(n))
+      .sort((a,b)=>a-b);
+  }
+
+  // 시간표에서 동일 prefix 학생 목록 (순번 오름차순)
+  let sameGroupStudents=[];
+  if(commonPrefix){
+    sameGroupStudents=Object.values(pm)
+      .filter(p=>p.id&&p.id.startsWith(commonPrefix)&&p.category==='학생')
+      .sort((a,b)=>parseInt(a.id.substring(prefixLen))-parseInt(b.id.substring(prefixLen)));
+  }
+
+  // ── 각 미확정 학생 교정 ──
   students.forEach((s,i)=>{
     if(!s.id) return;
-    if(pm[s.id]||pm[(s.id||'').toUpperCase()]) return; // 이미 맞음
+    if(pm[s.id]||pm[(s.id||'').toUpperCase()]) return;
 
     let fixed=false;
 
-    // prefix 교체 시도
-    if(commonPrefix){
-      const curPat=s.id.match(/^(\d{2,3}[A-Z]|\d{4})/i);
-      if(curPat){
-        const suffix=s.id.slice(curPat[0].length);
-        const candidate=(commonPrefix+suffix).toUpperCase();
-        const found=pm[candidate]||pm[candidate.toUpperCase()];
-        if(found){s.id=candidate;s.name=found.name;s._corrected=true;fixed=true;}
+    // 1단계: 이름 완전 일치로 시간표 탐색 (가장 신뢰)
+    if(s.name&&!fixed){
+      const byName=Object.values(pm).find(p=>
+        p.name===s.name&&p.category==='학생'&&
+        !students.find(x=>x!==s&&x.id===p.id)
+      );
+      if(byName){s.id=byName.id;s.name=byName.name;s._corrected=true;fixed=true;}
+    }
+
+    // 2단계: 공통 prefix + suffix 교체
+    if(!fixed&&commonPrefix){
+      const ocrSuffix=s.id.length>prefixLen?s.id.substring(s.id.length-(s.id.length-prefixLen)):s.id;
+      const candidate=commonPrefix+ocrSuffix;
+      const found=pm[candidate]||pm[candidate.toUpperCase()];
+      if(found&&!students.find(x=>x!==s&&x.id===found.id)){
+        s.id=found.id;s.name=found.name;s._corrected=true;fixed=true;
       }
     }
 
-    // 2단계: prefix 교체로 안 되면 퍼지 매칭
+    // 3단계: 순번 유추 — 이 학생의 목록 위치에서 앞뒤 확정 학번 사이 빈 번호 채우기
+    if(!fixed&&commonPrefix&&sameGroupStudents.length>0){
+      // 이 위치(i) 앞뒤 확정 학생의 번호 파악
+      let prevNum=null, nextNum=null;
+      for(let d=1;d<=students.length;d++){
+        if(prevNum===null&&i-d>=0&&students[i-d].id&&(pm[students[i-d].id]||pm[(students[i-d].id||'').toUpperCase()])){
+          const pn=parseInt(students[i-d].id.substring(prefixLen));
+          if(!isNaN(pn))prevNum=pn;
+        }
+        if(nextNum===null&&i+d<students.length&&students[i+d].id&&(pm[students[i+d].id]||pm[(students[i+d].id||'').toUpperCase()])){
+          const nn=parseInt(students[i+d].id.substring(prefixLen));
+          if(!isNaN(nn))nextNum=nn;
+        }
+        if(prevNum!==null&&nextNum!==null)break;
+      }
+
+      // 앞뒤 번호 사이에 있는 미사용 학생 후보
+      if(prevNum!==null||nextNum!==null){
+        const candidates=sameGroupStudents.filter(p=>{
+          const num=parseInt(p.id.substring(prefixLen));
+          if(isNaN(num)) return false;
+          const afterPrev=prevNum===null||num>prevNum;
+          const beforeNext=nextNum===null||num<nextNum;
+          return afterPrev&&beforeNext&&!students.find(x=>x!==s&&x.id===p.id);
+        });
+        if(candidates.length===1){
+          // 후보가 1명이면 확정
+          s.id=candidates[0].id;s.name=candidates[0].name;s._corrected=true;fixed=true;
+          console.log(`순번유추: 위치${i} → ${candidates[0].id}(${candidates[0].name})`);
+        }
+      }
+    }
+
+    // 4단계: 퍼지 매칭 (이름 일치 보장 조건)
     if(!fixed){
-      const fuzzy=fuzzyFindId(s.id, pm, 2);
-      if(fuzzy){
-        console.log(`퍼지교정: ${s.id} → ${fuzzy.id} (${fuzzy.name})`);
-        s.id=fuzzy.id;s.name=fuzzy.name;s._corrected=true;fixed=true;
-      }
-    }
-
-    // 3단계: 이름으로 학번 탐색
-    if(!fixed&&s.name){
-      const byName=Object.values(pm).find(p=>p.name===s.name&&p.category==='학생');
-      if(byName){s.id=byName.id;s._corrected=true;}
-    }
-  });
-
-  // 4단계: 이름으로 학번 역탐색 (퍼지보다 안전)
-  students.forEach(s=>{
-    if(s.id&&(pm[s.id]||pm[(s.id||'').toUpperCase()])) return;
-    if(!s.name) return;
-    const byName=Object.values(pm).find(p=>
-      p.name===s.name&&p.category==='학생'&&
-      !students.find(x=>x!==s&&x.id===p.id)
-    );
-    if(byName){s.id=byName.id;s._corrected=true;}
-  });
-
-  // 5단계: 퍼지 매칭 (이름 검증 추가 — 이름이 맞을 때만 적용)
-  const stillInvalid=students.filter(s=>s.id&&!(pm[s.id]||pm[(s.id||'').toUpperCase()]));
-  if(stillInvalid.length>0){
-    stillInvalid.forEach(s=>{
-      if(!s.id) return;
       const fuzzy=fuzzyFindId(s.id,pm,2);
-      if(!fuzzy) return;
-      // 이름도 있으면 이름 일치할 때만 적용
-      if(s.name&&fuzzy.name&&s.name!==fuzzy.name) return;
-      if(!students.find(x=>x!==s&&x.id===fuzzy.id)){
+      if(fuzzy&&(!s.name||s.name===fuzzy.name)&&!students.find(x=>x!==s&&x.id===fuzzy.id)){
         s.id=fuzzy.id;s.name=fuzzy.name;s._corrected=true;
       }
+    }
+  });
+
+  return students;
+}
+
+
+// ─── P&S 순번 패턴으로 누락 학생 자동 채우기 ───
+// OCR이 6명만 읽었을 때, 학번 순번 사이 빈 번호를 시간표에서 찾아 추가
+function fillSequentialGaps(students){
+  const pm = getPersonMap();
+  if(students.length < 2) return students;
+
+  // 확정된 학번에서 공통 prefix와 번호 목록 추출
+  const confirmed = students.filter(s => s.id && (pm[s.id] || pm[(s.id||'').toUpperCase()]));
+  if(confirmed.length < 2) return students;
+
+  // 가장 긴 공통 prefix 찾기
+  let prefix = '', prefixLen = 0;
+  for(const pLen of [6, 5, 4]){
+    const counts = {};
+    confirmed.forEach(s => {
+      if(s.id.length >= pLen){
+        const p = s.id.substring(0, pLen);
+        counts[p] = (counts[p]||0) + 1;
+      }
     });
+    const top = Object.entries(counts).sort((a,b)=>b[1]-a[1])[0];
+    if(top && top[1] >= Math.ceil(confirmed.length * 0.5)){
+      prefix = top[0]; prefixLen = pLen; break;
+    }
   }
+  if(!prefix) return students;
+
+  // 확정 번호 목록 (오름차순)
+  const confirmedNums = confirmed
+    .filter(s => s.id.startsWith(prefix))
+    .map(s => parseInt(s.id.substring(prefixLen)))
+    .filter(n => !isNaN(n))
+    .sort((a,b)=>a-b);
+
+  if(confirmedNums.length < 2) return students;
+
+  const minNum = confirmedNums[0];
+  const maxNum = confirmedNums[confirmedNums.length-1];
+  const usedIds = new Set(students.map(s=>s.id).filter(Boolean));
+
+  // 시간표에서 같은 prefix를 가진 학생 목록 (순번 정렬)
+  const groupStudents = Object.values(pm)
+    .filter(p => p.id && p.id.startsWith(prefix) && p.category === '학생')
+    .sort((a,b) => parseInt(a.id.substring(prefixLen)) - parseInt(b.id.substring(prefixLen)));
+
+  // 확정 번호 사이 빈 번호에 해당하는 학생 탐색
+  const gapStudents = groupStudents.filter(p => {
+    const num = parseInt(p.id.substring(prefixLen));
+    return num >= minNum && num <= maxNum && !usedIds.has(p.id);
+  });
+
+  if(gapStudents.length === 0) return students;
+
+  // 빈 번호 위치에 삽입 (확정 학번들 사이의 정렬 위치)
+  gapStudents.forEach(gap => {
+    const gapNum = parseInt(gap.id.substring(prefixLen));
+    // 이미 있는지 확인
+    if(students.find(s=>s.id===gap.id)) return;
+    // 삽입 위치: 이 번호보다 작은 마지막 확정 학생 다음
+    let insertIdx = students.length;
+    for(let i = 0; i < students.length; i++){
+      const s = students[i];
+      if(s.id && s.id.startsWith(prefix)){
+        const sNum = parseInt(s.id.substring(prefixLen));
+        if(!isNaN(sNum) && sNum > gapNum){ insertIdx = i; break; }
+      }
+    }
+    students.splice(insertIdx, 0, {
+      id: gap.id, name: gap.name, dept: gap.dept||'',
+      category: '학생', _gapFilled: true
+    });
+    console.log(`순번보충: ${gap.id} ${gap.name} 삽입 (위치${insertIdx})`);
+  });
+
   return students;
 }
 
@@ -1552,8 +1741,11 @@ function renderExtractedPreview(){
     if(found&&found.name&&s.name!==found.name) s.name=found.name; // 데이터도 교정
     const hasData=!!found;
     const corrected=s._corrected?true:false;
+    const gapFilled=s._gapFilled?true:false;
     const badge=hasData
-      ?(corrected
+      ?(gapFilled
+        ?`<span class="badge bd-blue" id="badge-${i}" title="순번 패턴으로 자동 보충됨">✅ 시간표 있음 ➕</span>`
+        :corrected
         ?`<span class="badge bd-green" id="badge-${i}" title="학번 자동 교정됨">✅ 시간표 있음 🔧</span>`
         :`<span class="badge bd-green" id="badge-${i}">✅ 시간표 있음</span>`)
       :`<span class="badge bd-yellow" id="badge-${i}">⚠️ 시간표 없음</span>`;
