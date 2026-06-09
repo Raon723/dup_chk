@@ -163,7 +163,7 @@
 <header class="app-header">
   <div class="header-inner">
     <div>
-      <div class="header-title">📋 비교과 프로그램 수업 중복 검사 시스템 <span style="font-size:13px;font-weight:400;opacity:0.7;margin-left:8px">v0.57</span></div>
+      <div class="header-title">📋 비교과 프로그램 수업 중복 검사 시스템 <span style="font-size:13px;font-weight:400;opacity:0.7;margin-left:8px">v0.59</span></div>
       <div class="header-sub">학생성공·상담센터 | 교수·학생의 수업시간 중복 여부를 빠르게 확인하세요</div>
     </div>
     <div class="header-badge">🎓 계명문화대학교</div>
@@ -277,6 +277,7 @@
         <div class="sub-tabs">
           <button class="sub-tab" onclick="switchSub('student','search')" id="student-tab-search">🔍 시간표에서 검색</button>
           <button class="sub-tab" onclick="switchSub('student','direct')" id="student-tab-direct">⌨️ 직접 입력</button>
+          <button class="sub-tab" onclick="switchSub('student','paste')" id="student-tab-paste">📋 텍스트 붙여넣기</button>
           <button class="sub-tab" onclick="switchSub('student','excel')" id="student-tab-excel">📊 엑셀 업로드</button>
           <button class="sub-tab active" onclick="switchSub('student','capture')" id="student-tab-capture">📸 화면 캡처</button>
         </div>
@@ -315,6 +316,27 @@
               <button class="btn btn-primary btn-sm" onclick="addStudentsDirect()">전체 추가</button>
             </div>
           </details>
+        </div>
+        <div id="student-panel-paste" style="display:none">
+          <div class="notice np" style="margin-bottom:12px">
+            📋 통합정보시스템에서 학번(또는 이름) 열을 복사해서 <strong>Ctrl+V</strong>로 바로 붙여넣으세요.<br>
+            <span style="font-size:12px;color:var(--text-secondary)">줄바꿈·쉼표·탭으로 구분된 학번/이름/학번+이름 모두 인식합니다.</span>
+          </div>
+          <textarea id="pasteInput" class="form-control" rows="8"
+            placeholder="여기에 붙여넣기 (Ctrl+V)&#10;&#10;예시 1 — 학번만:&#10;2635016&#10;2635017&#10;2635018&#10;&#10;예시 2 — 탭 구분 (학번+이름):&#10;2635016  홍길동&#10;2635017  김철수"
+            oninput="previewPasteStudents()"
+            style="font-family:monospace;font-size:13px;resize:vertical;min-height:160px;line-height:1.7">
+          </textarea>
+          <div style="margin-top:10px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <button class="btn btn-ps btn-sm" onclick="addPasteStudents()">✅ 전체 추가</button>
+            <button class="btn btn-secondary btn-sm" onclick="clearPasteInput()">🗑️ 지우기</button>
+            <span id="pastePreviewCount" style="font-size:13px;color:var(--ps);font-weight:500"></span>
+          </div>
+          <!-- 미리보기 -->
+          <div id="pastePreviewArea" style="display:none;margin-top:12px">
+            <div style="font-size:13px;font-weight:600;color:var(--ps);margin-bottom:8px">인식된 학생 목록</div>
+            <div id="pastePreviewList" style="border:1px solid #ddd6fe;border-radius:8px;overflow:hidden;background:white"></div>
+          </div>
         </div>
         <div id="student-panel-excel" style="display:none">
           <div class="notice np" style="margin-bottom:12px">📊 학번과 이름이 포함된 엑셀 파일을 올려주세요. 컬럼 위치는 자동으로 인식합니다.</div>
@@ -415,14 +437,7 @@
         </div>
 
         <div id="psmode-panel-direct">
-          <div class="notice np" style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
-            <span>📅 지정한 요일·시간에 교수와 학생들 중 수업이 있는 사람이 누구인지 바로 확인합니다.</span>
-            <label id="dtCapLabel" style="display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border-radius:8px;border:1.5px solid #ddd6fe;background:white;color:var(--ps);font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap;transition:all 0.15s;" onmouseover="this.style.background='#ede9fe'" onmouseout="this.style.background='white'" title="날짜·시간이 보이는 화면을 캡처 후 Ctrl+V 또는 클릭하여 이미지 선택">
-              📸 캡처로 날짜·시간 입력
-              <input type="file" accept="image/*" id="dtCaptureInput" style="display:none" onchange="handleDtCapture(event)">
-            </label>
-          </div>
-          <div id="dtCaptureStatus" style="display:none;font-size:13px;padding:6px 10px;border-radius:6px;margin-bottom:8px"></div>
+          <div class="notice np">📅 지정한 요일·시간에 교수와 학생들 중 수업이 있는 사람이 누구인지 바로 확인합니다.</div>
           <!-- 숨겨진 요일 값 저장용 -->
           <input type="hidden" id="psDay" value="">
           <div class="form-row form-row-3">
@@ -644,7 +659,7 @@ function resetAll(){
 function selectMode(mode){/* 통합됨 - 항상 P&S 모드 */}
 
 function switchSub(group,tab){
-  const map={prof:['search','direct'],student:['search','direct','excel','capture'],psmode:['direct','auto']};
+  const map={prof:['search','direct'],student:['search','direct','paste','excel','capture'],psmode:['direct','auto']};
   for(const t of map[group]){
     const btn=document.getElementById(`${group}-tab-${t}`);
     const panel=document.getElementById(`${group}-panel-${t}`);
@@ -864,13 +879,7 @@ async function smartPasteRoute(file, allItems){
       const isDateTime=detectDateTimePattern(text);
       const isStudentList=detectStudentPattern(text);
 
-      if(isDateTime&&!isStudentList){
-        // 날짜/시간 패턴 → 날짜/시간 캡처로 처리
-        const dtStatus=document.getElementById('dtCaptureStatus');
-        if(dtStatus){dtStatus.style.display='block';dtStatus.style.background='#ede9fe';dtStatus.style.color='var(--ps)';dtStatus.textContent='📸 날짜·시간 이미지 감지 → 인식 중...';}
-        switchSub('psmode','direct');
-        await parseDateTimeFromOcr(text);
-      } else {
+      {
         // 학생 명단 패턴 (또는 불명확) → 학생 캡처로 처리
         switchSub('student','capture');
         // 이미 OCR 완료된 텍스트 재활용
@@ -892,7 +901,7 @@ async function smartPasteRoute(file, allItems){
       if(stuTab&&stuTab.classList.contains('active')){
         allItems.forEach(item=>addCaptureFile(item.getAsFile(),true));
       } else {
-        loadDtCapture(file);
+        allItems.forEach(item=>addCaptureFile(item.getAsFile(),true));
       }
     }
   };
@@ -907,36 +916,6 @@ function detectDateTimePattern(text){
 function detectStudentPattern(text){
   // 학생 명단 패턴 감지: 한글이름 + 7자리 숫자 조합
   return /[가-힣]{2,5}[\s\S]{0,10}\d{7}|\d{7}[\s\S]{0,10}[가-힣]{2,5}/.test(text);
-}
-
-async function parseDateTimeFromOcr(text){
-  const parsed=parseDateTimeFromText(text);
-  if(parsed.date){
-    calSelected=parsed.date;
-    calYear=parsed.date.getFullYear();
-    calMonth=parsed.date.getMonth();
-    setCalDate(parsed.date);
-  }
-  if(parsed.start){
-    const h=String(Math.floor(parsed.start/60)).padStart(2,'0');
-    const m=String(parsed.start%60).padStart(2,'0');
-    document.getElementById('psStart').value=h+':'+m;
-  }
-  if(parsed.end){
-    const h=String(Math.floor(parsed.end/60)).padStart(2,'0');
-    const m=String(parsed.end%60).padStart(2,'0');
-    document.getElementById('psEnd').value=h+':'+m;
-  } else if(parsed.start){
-    autoSetEndTime();
-  }
-  const st=document.getElementById('dtCaptureStatus');
-  const parts=[];
-  if(parsed.date) parts.push(calSelected.toLocaleDateString('ko-KR',{month:'long',day:'numeric',weekday:'short'}));
-  if(parsed.start) parts.push(document.getElementById('psStart').value+'~'+document.getElementById('psEnd').value);
-  if(st){
-    if(parts.length){st.style.background='#dcfce7';st.style.color='#15803d';st.textContent='✅ 날짜·시간 인식: '+parts.join(' ');}
-    else{st.style.background='#fef3c7';st.style.color='#92400e';st.textContent='⚠️ 날짜·시간을 인식하지 못했습니다. 달력에서 직접 선택해 주세요.';}
-  }
 }
 
 function applyParsedToExtracted(parsed,imgIdx){
@@ -2168,6 +2147,132 @@ function addSingleStudent(){
 }
 
 
+// ─── 텍스트 붙여넣기 학생 입력 ───
+function parsePasteText(raw){
+  const pm=getPersonMap();
+  const lines=raw.split(/[\n\r]+/).map(l=>l.trim()).filter(Boolean);
+  const results=[];
+
+  lines.forEach(line=>{
+    // 탭·쉼표·연속공백으로 분리 (학번+이름 or 이름+학번)
+    const parts=line.split(/\t|,|，|\s{2,}/).map(p=>p.trim()).filter(Boolean);
+
+    let id='', name='';
+
+    if(parts.length>=2){
+      // 두 칸 이상 → 학번+이름 or 이름+학번 판별
+      const p0=parts[0], p1=parts[1];
+      if(/^\d{5,}$|^\d{2,3}[A-Z]\d{3,}/i.test(p0)){id=p0.toUpperCase();name=p1;}
+      else if(/^\d{5,}$|^\d{2,3}[A-Z]\d{3,}/i.test(p1)){id=p1.toUpperCase();name=p0;}
+      else{name=p0;} // 둘 다 이름 형태면 첫 번째만
+    } else {
+      const p=parts[0];
+      if(/^\d{5,}$|^\d{2,3}[A-Z]\d{3,}/i.test(p)) id=p.toUpperCase();
+      else if(/^[가-힣]{2,5}$/.test(p)) name=p;
+      else {
+        // 한 줄에 붙어있는 경우: 학번이 앞에 있고 이름이 뒤에 붙은 형태
+        const m=p.match(/^(\d{5,}|\d{2,3}[A-Z]\d{3,})([가-힣]{2,5})?/i);
+        if(m){id=(m[1]||'').toUpperCase();name=m[2]||'';}
+        else{name=p;}
+      }
+    }
+
+    if(!id&&!name) return;
+
+    // 시간표에서 보정
+    if(id){
+      const found=pm[id]||pm[id.toLowerCase()];
+      if(found){name=found.name;}
+    }
+    if(!id&&name){
+      const found=Object.values(pm).find(p=>p.name===name&&p.category==='학생');
+      if(found){id=found.id;}
+    }
+
+    if(id||name) results.push({id,name,_inTimetable:!!(id&&(pm[id]||pm[id.toLowerCase()]))});
+  });
+
+  // 중복 제거
+  const seen=new Set();
+  return results.filter(r=>{
+    const key=r.id||r.name;
+    if(seen.has(key)) return false;
+    seen.add(key); return true;
+  });
+}
+
+function previewPasteStudents(){
+  const raw=document.getElementById('pasteInput').value;
+  const results=parsePasteText(raw);
+  const countEl=document.getElementById('pastePreviewCount');
+  const area=document.getElementById('pastePreviewArea');
+  const list=document.getElementById('pastePreviewList');
+
+  if(!results.length){
+    countEl.textContent='';
+    area.style.display='none';
+    return;
+  }
+
+  const ok=results.filter(r=>r._inTimetable).length;
+  countEl.textContent=`${results.length}명 인식 (시간표 있음 ${ok}명)`;
+
+  list.innerHTML=results.map((r,i)=>{
+    const badge=r._inTimetable
+      ?'<span class="badge bd-green">✅ 시간표 있음</span>'
+      :'<span class="badge bd-yellow">⚠️ 시간표 없음</span>';
+    return `<div style="display:flex;align-items:center;gap:10px;padding:7px 14px;border-bottom:1px solid #f1f5f9;font-size:13px">
+      <span style="color:var(--text-secondary);min-width:20px;font-size:12px">${i+1}</span>
+      <span style="font-family:monospace;font-weight:600;min-width:90px">${r.id||'-'}</span>
+      <span style="font-weight:500;min-width:70px">${r.name||'-'}</span>
+      ${badge}
+    </div>`;
+  }).join('');
+
+  area.style.display='block';
+}
+
+function addPasteStudents(){
+  const raw=document.getElementById('pasteInput').value;
+  const results=parsePasteText(raw);
+  if(!results.length){alert('붙여넣은 내용에서 학생 정보를 찾지 못했습니다.');return;}
+  const pm=getPersonMap();
+  let cnt=0;
+  results.forEach(r=>{
+    const id=r.id;
+    if(!id) return;
+    if(selectedStudents.find(s=>s.id===id)) return;
+    const found=pm[id]||pm[id.toLowerCase()];
+    selectedStudents.push(found||{id,name:r.name||'',dept:'',category:'학생'});
+    cnt++;
+  });
+  renderStudents();
+  document.getElementById('pasteInput').value='';
+  document.getElementById('pastePreviewArea').style.display='none';
+  document.getElementById('pastePreviewCount').textContent=`✅ ${cnt}명 추가 완료`;
+}
+
+function clearPasteInput(){
+  document.getElementById('pasteInput').value='';
+  document.getElementById('pastePreviewArea').style.display='none';
+  document.getElementById('pastePreviewCount').textContent='';
+}
+
+// 텍스트 붙여넣기 탭 활성 상태에서 Ctrl+V 텍스트 처리
+document.addEventListener('paste', function(e){
+  const pasteTab=document.getElementById('student-tab-paste');
+  if(!pasteTab||!pasteTab.classList.contains('active')) return;
+  const text=e.clipboardData.getData('text/plain');
+  if(!text) return;
+  const el=document.getElementById('pasteInput');
+  if(!el||document.activeElement===el) return; // 이미 포커스된 경우 기본 동작
+  e.preventDefault();
+  el.value=(el.value?el.value+'\n':'')+text.trim();
+  el.focus();
+  previewPasteStudents();
+}, true);
+
+
 function addStudentsDirect(){
   const raw=document.getElementById('stuDirectIds').value.trim();
   if(!raw)return;
@@ -2329,114 +2434,6 @@ function renderAutoResult(results,targets,minD){
 // =========================================================
 const KO_DAYS=['일','월','화','수','목','금','토'];
 let calYear=new Date().getFullYear(), calMonth=new Date().getMonth(), calSelected=null;
-
-function handleDtCapture(e){
-  const f=e.target.files[0];
-  if(f) loadDtCapture(f);
-  document.getElementById('dtCaptureInput').value='';
-}
-
-async function loadDtCapture(file){
-  const st=document.getElementById('dtCaptureStatus');
-  st.style.display='block';
-  st.style.background='#ede9fe'; st.style.color='var(--ps)';
-  st.textContent='⏳ 이미지에서 날짜·시간 인식 중...';
-
-  const reader=new FileReader();
-  reader.onload=async function(ev){
-    try{
-      if(typeof Tesseract==='undefined') throw new Error('OCR 라이브러리 필요');
-      const processed=await preprocessImage(ev.target.result);
-      const result=await Tesseract.recognize(processed,'kor+eng',{});
-      const text=(result.data?result.data.text:result.text)||'';
-      const parsed=parseDateTimeFromText(text);
-
-      if(parsed.date){
-        calSelected=parsed.date;
-        calYear=parsed.date.getFullYear();
-        calMonth=parsed.date.getMonth();
-        setCalDate(parsed.date);
-      }
-      if(parsed.start){
-        const h=String(Math.floor(parsed.start/60)).padStart(2,'0');
-        const m=String(parsed.start%60).padStart(2,'0');
-        document.getElementById('psStart').value=h+':'+m;
-      }
-      if(parsed.end){
-        const h=String(Math.floor(parsed.end/60)).padStart(2,'0');
-        const m=String(parsed.end%60).padStart(2,'0');
-        document.getElementById('psEnd').value=h+':'+m;
-      } else if(parsed.start){
-        autoSetEndTime();
-      }
-
-      const parts=[];
-      if(parsed.date) parts.push(calSelected.toLocaleDateString('ko-KR',{month:'long',day:'numeric',weekday:'short'}));
-      if(parsed.start) parts.push(document.getElementById('psStart').value+'~'+document.getElementById('psEnd').value);
-
-      if(parts.length){
-        st.style.background='#dcfce7'; st.style.color='#15803d';
-        st.textContent='✅ 인식 완료: '+parts.join(' ');
-      } else {
-        st.style.background='#fef3c7'; st.style.color='#92400e';
-        st.textContent='⚠️ 날짜·시간을 인식하지 못했습니다. 달력에서 직접 선택해 주세요.';
-      }
-    }catch(err){
-      st.style.background='#fee2e2'; st.style.color='var(--danger)';
-      st.textContent='⚠️ '+err.message;
-    }
-  };
-  reader.readAsDataURL(file);
-}
-
-function parseDateTimeFromText(text){
-  const result={date:null, start:null, end:null};
-  const t=text.replace(/\s+/g,' ');
-
-  // 날짜 패턴: 2026년 05월 13일, 2026-05-13, 5/13, 13일(수) 등
-  const datePatterns=[
-    /(\d{4})[년.\-\/]\s*(\d{1,2})[월.\-\/]\s*(\d{1,2})/,
-    /(\d{1,2})[월\/]\s*(\d{1,2})[일]?/,
-    /(\d{1,2})\.(\d{1,2})/
-  ];
-  for(const pat of datePatterns){
-    const m=t.match(pat);
-    if(m){
-      let y,mo,d;
-      if(m.length===4){y=parseInt(m[1]);mo=parseInt(m[2])-1;d=parseInt(m[3]);}
-      else{y=new Date().getFullYear();mo=parseInt(m[1])-1;d=parseInt(m[2]);}
-      if(mo>=0&&mo<12&&d>=1&&d<=31){result.date=new Date(y,mo,d);break;}
-    }
-  }
-
-  // 시간 패턴: 13:00, 오후 1:00, 1300, 오후1시 등
-  const timeTokens=[];
-  const timePat=/(?:오전|오후)?\s*(\d{1,2})[:시]\s*(\d{0,2})(?:분)?|(?:오전|오후)\s*(\d{1,2})/g;
-  let m;
-  while((m=timePat.exec(t))!==null){
-    const prefix=t.substring(Math.max(0,m.index-3),m.index);
-    const isPm=/오후/.test(m[0])||/오후/.test(prefix);
-    const isAm=/오전/.test(m[0])||/오전/.test(prefix);
-    let h=parseInt(m[1]||m[3]);
-    const min=parseInt(m[2]||'0')||0;
-    if(isPm&&h<12)h+=12;
-    if(isAm&&h===12)h=0;
-    if(h>=0&&h<24)timeTokens.push(h*60+min);
-  }
-  // 숫자만으로 된 시간(1300, 0900) 추가 탐색
-  const rawTime=t.match(/\b([01]?\d|2[0-3])([0-5]\d)\b/g)||[];
-  rawTime.forEach(rt=>{
-    const h=parseInt(rt.substring(0,rt.length-2));
-    const min=parseInt(rt.substring(rt.length-2));
-    if(h>=7&&h<24)timeTokens.push(h*60+min);
-  });
-
-  const uniqueTimes=[...new Set(timeTokens)].sort((a,b)=>a-b);
-  if(uniqueTimes.length>=1)result.start=uniqueTimes[0];
-  if(uniqueTimes.length>=2)result.end=uniqueTimes[1];
-  return result;
-}
-
 
 function autoSetEndTime(){
   const startEl=document.getElementById('psStart');
